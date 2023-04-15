@@ -8,11 +8,14 @@ module OAS
   end
 
   class Server
-    props :url, :description?
+    class Variable
+      props :default, :description?, :enum?
+    end
+
+    props :url, :description?, variables?: { variabe: Variable }
   end
 
   class Spec
     props :openapi, info: Info, servers: [Server]
   end
-
 end

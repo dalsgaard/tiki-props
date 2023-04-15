@@ -1,12 +1,14 @@
 module Props
   class Prop
-    attr_reader :name, :required, :list_class, :object_class, :filter
+    attr_reader :name, :required, :list_class, :object_class, :map_class, :filter
 
-    def initialize(name, required = true, list_class: nil, object_class: nil, prop_name: nil, filter: nil)
+    def initialize(name, required = true, list_class: nil, object_class: nil, map_class: nil, prop_name: nil,
+                   filter: nil)
       @name = name.to_s
       @required = required
       @list_class = list_class
       @object_class = object_class
+      @map_class = map_class
       @prop_name = prop_name
       @filter = filter
     end
@@ -17,6 +19,10 @@ module Props
 
     def object?
       !@object_class.nil?
+    end
+
+    def map?
+      !@map_class.nil?
     end
 
     def filtered?
@@ -40,24 +46,25 @@ module Props
       end
     end
 
-    private
-
     def self.parse_string(input)
-      self.new *parse_name(input)
+      new(*parse_name(input))
     end
 
     def self.parse_array(input)
       input.insert(1, nil) if input[1].is_a? Class
       raw_name, prop_name, list_class, filter = input
-      self.new *parse_name(raw_name), list_class: list_class, prop_name: prop_name, filter: filter
+      new(*parse_name(raw_name), list_class:, prop_name:, filter:)
     end
 
     def self.parse_hash(input)
       input.entries.map do |raw_name, object_class|
         if object_class.instance_of? Array
-          self.new *parse_name(raw_name), list_class: object_class.first
+          new(*parse_name(raw_name), list_class: object_class.first)
+        elsif object_class.instance_of? Hash
+          _key, map_class = object_class.entries.first
+          new(*parse_name(raw_name), map_class:)
         else
-          self.new *parse_name(raw_name), object_class: object_class
+          new(*parse_name(raw_name), object_class:)
         end
       end
     end
@@ -71,9 +78,18 @@ module Props
     end
   end
 
+  module Includes
+    def foo
+      puts 'Foo!'
+    end
+  end
+
   refine Class do
     def props(*args, **named)
-      unless args.empty? && named.empty?
+      if args.empty? && named.empty?
+        @props
+      else
+        include Includes
         init_props
         # Create the new property objects
         props = args.map { |arg| Prop.parse arg }.flatten
@@ -82,39 +98,39 @@ module Props
         props.each { |prop| attr_accessor prop.prop_name }
         # Add the new properties to the list of properties
         @props += props
-      else
-        @props 
       end
     end
 
     def prop(name, prop_name, required: true, object_class: nil)
       init_props
-      prop = Prop.new name, required, prop_name: prop_name, object_class: object_class
+      prop = Prop.new(name, required, prop_name:, object_class:)
       attr_accessor prop.prop_name
+
       @props << prop
     end
 
     def list(name, list_class, prop_name = nil, required: true, &filter)
       init_props
-      prop = Prop.new name, required, prop_name: prop_name, list_class: list_class, filter: filter
+      prop = Prop.new(name, required, prop_name:, list_class:, filter:)
       attr_accessor prop.prop_name
+
       @props << prop
     end
 
     private
 
     def init_props
-      if @props.nil? # Only create these methods once
-        @props = []
-        # Define the init method
-        define_init
-        # Create a constructor that calls the init method
-        define_initialize
-        # Create a serialization method
-        define_serialize
-        # Create a props method
-        define_props
-      end 
+      return unless @props.nil? # Only create these methods once
+
+      @props = []
+      # Define the init method
+      define_init
+      # Create a constructor that calls the init method
+      define_initialize
+      # Create a serialization method
+      define_serialize
+      # Create a props method
+      define_props
     end
 
     def define_props
@@ -136,9 +152,14 @@ module Props
             list_class = prop.list_class
             filter = prop.filter
             value = value&.filter(&filter) if filter
-            instance_variable_set "@#{prop_name}", value&.map do |input|
+            list = value&.map do |input|
               input.is_a?(list_class) ? input : list_class.new(input)
             end
+            instance_variable_set "@#{prop_name}", list
+          elsif prop.map?
+            map_class = prop.map_class
+            entries = value&.entries&.map { |k, v| [k, v.is_a?(map_class) ? v : map_class.new(v)] }
+            instance_variable_set "@#{prop_name}", entries ? Hash[entries] : nil
           elsif prop.object?
             object_class = prop.object_class
             object = value.is_a?(object_class) ? value : object_class.new(value)
@@ -151,7 +172,7 @@ module Props
     end
 
     def define_initialize
-      define_method :initialize do |input, **named|
+      define_method :initialize do |input = nil, **named|
         if input
           init input
         elsif !named.empty?
@@ -168,15 +189,16 @@ module Props
           raw_value = instance_variable_get "@#{prop_name}"
           if raw_value.nil?
             nil
+          elsif prop.list?
+            prop.filtered? ? nil : [name, raw_value&.map(&:serialize)]
+          elsif prop.object?
+            value = raw_value&.serialize
+            [name, value]
+          elsif prop.map?
+            entries = raw_value&.entries&.map { |k, v| [k, v.serialize] }
+            [name, entries ? Hash[entries] : nil]
           else
-            if prop.list?
-              prop.filtered? ? nil : [name, raw_value&.map(&:serialize)]
-            elsif prop.object?
-              value = raw_value&.serialize
-              [name, value]
-            else
-              [name, raw_value]
-            end
+            [name, raw_value]
           end
         end.filter { |entry| !entry.nil? }
         Hash[entries]
