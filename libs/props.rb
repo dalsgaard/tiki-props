@@ -79,8 +79,55 @@ module Props
   end
 
   module Includes
-    def foo
-      puts 'Foo!'
+    def init(input)
+      props.map do |prop|
+        prop_name = prop.prop_name
+        required = prop.required
+        name = prop.name
+        key = input.has_key?(name) ? name : name.to_sym
+        value = required ? input.fetch(key) : input.fetch(key, nil)
+        if prop.list?
+          list_class = prop.list_class
+          filter = prop.filter
+          value = value&.filter(&filter) if filter
+          list = value&.map do |input|
+            input.is_a?(list_class) ? input : list_class.new(input)
+          end
+          instance_variable_set "@#{prop_name}", list
+        elsif prop.map?
+          map_class = prop.map_class
+          entries = value&.entries&.map { |k, v| [k, v.is_a?(map_class) ? v : map_class.new(v)] }
+          instance_variable_set "@#{prop_name}", entries ? Hash[entries] : nil
+        elsif prop.object?
+          object_class = prop.object_class
+          object = value.is_a?(object_class) ? value : object_class.new(value)
+          instance_variable_set "@#{prop_name}", object
+        else
+          instance_variable_set "@#{prop_name}", value
+        end
+      end
+    end
+
+    def serialize
+      entries = props.map do |prop|
+        name = prop.name
+        prop_name = prop.prop_name
+        raw_value = instance_variable_get "@#{prop_name}"
+        if raw_value.nil?
+          nil
+        elsif prop.list?
+          prop.filtered? ? nil : [name, raw_value&.map(&:serialize)]
+        elsif prop.object?
+          value = raw_value&.serialize
+          [name, value]
+        elsif prop.map?
+          entries = raw_value&.entries&.map { |k, v| [k, v.serialize] }
+          [name, entries ? Hash[entries] : nil]
+        else
+          [name, raw_value]
+        end
+      end.filter { |entry| !entry.nil? }
+      Hash[entries]
     end
   end
 
@@ -89,7 +136,6 @@ module Props
       if args.empty? && named.empty?
         @props
       else
-        include Includes
         init_props
         # Create the new property objects
         props = args.map { |arg| Prop.parse arg }.flatten
@@ -120,16 +166,11 @@ module Props
     private
 
     def init_props
-      return unless @props.nil? # Only create these methods once
+      return if include?(Includes)
 
       @props = []
-      # Define the init method
-      define_init
-      # Create a constructor that calls the init method
+      include Includes
       define_initialize
-      # Create a serialization method
-      define_serialize
-      # Create a props method
       define_props
     end
 
@@ -140,37 +181,6 @@ module Props
       end
     end
 
-    def define_init
-      define_method :init do |input|
-        props.map do |prop|
-          prop_name = prop.prop_name
-          required = prop.required
-          name = prop.name
-          key = input.has_key?(name) ? name : name.to_sym
-          value = required ? input.fetch(key) : input.fetch(key, nil)
-          if prop.list?
-            list_class = prop.list_class
-            filter = prop.filter
-            value = value&.filter(&filter) if filter
-            list = value&.map do |input|
-              input.is_a?(list_class) ? input : list_class.new(input)
-            end
-            instance_variable_set "@#{prop_name}", list
-          elsif prop.map?
-            map_class = prop.map_class
-            entries = value&.entries&.map { |k, v| [k, v.is_a?(map_class) ? v : map_class.new(v)] }
-            instance_variable_set "@#{prop_name}", entries ? Hash[entries] : nil
-          elsif prop.object?
-            object_class = prop.object_class
-            object = value.is_a?(object_class) ? value : object_class.new(value)
-            instance_variable_set "@#{prop_name}", object
-          else
-            instance_variable_set "@#{prop_name}", value
-          end
-        end
-      end
-    end
-
     def define_initialize
       define_method :initialize do |input = nil, **named|
         if input
@@ -178,30 +188,6 @@ module Props
         elsif !named.empty?
           init named
         end
-      end
-    end
-
-    def define_serialize
-      define_method :serialize do
-        entries = props.map do |prop|
-          name = prop.name
-          prop_name = prop.prop_name
-          raw_value = instance_variable_get "@#{prop_name}"
-          if raw_value.nil?
-            nil
-          elsif prop.list?
-            prop.filtered? ? nil : [name, raw_value&.map(&:serialize)]
-          elsif prop.object?
-            value = raw_value&.serialize
-            [name, value]
-          elsif prop.map?
-            entries = raw_value&.entries&.map { |k, v| [k, v.serialize] }
-            [name, entries ? Hash[entries] : nil]
-          else
-            [name, raw_value]
-          end
-        end.filter { |entry| !entry.nil? }
-        Hash[entries]
       end
     end
   end
