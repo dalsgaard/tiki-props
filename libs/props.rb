@@ -1,4 +1,8 @@
+require 'json'
+
 module Props
+  @@unique_object = Object.new
+
   class Prop
     attr_reader :name, :required, :list_class, :object_class, :map_class, :filter
 
@@ -79,6 +83,21 @@ module Props
   end
 
   module Includes
+    def self.included(base)
+      base.extend ClassMethods
+    end
+
+    module ClassMethods
+      def read(filename)
+        input = JSON.parse(File.read(filename))
+        new input
+      end
+    end
+
+    def write(filename)
+      File.write filename, JSON.pretty_generate(serialize)
+    end
+
     def init(input)
       props.map do |prop|
         prop_name = prop.prop_name
@@ -137,12 +156,23 @@ module Props
         @props
       else
         init_props
-        # Create the new property objects
         props = args.map { |arg| Prop.parse arg }.flatten
         props += Prop.parse named
-        # Create accessors
-        props.each { |prop| attr_accessor prop.prop_name }
-        # Add the new properties to the list of properties
+        props.each do |prop|
+          name = prop.prop_name
+          if prop.map?
+            define_method name do |key = nil, value = @@unique_object|
+              map = instance_variable_get("@#{name}")
+              if value == @@unique_object
+                key && map ? map[key.to_s] : map
+              else
+                map[key.to_s] = value
+              end
+            end
+          else
+            attr_accessor name
+          end
+        end
         @props += props
       end
     end

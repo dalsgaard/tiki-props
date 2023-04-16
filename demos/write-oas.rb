@@ -9,4 +9,4 @@ variables = {
 servers = %w[http://foo.bar http://bar.baz].map { |url| OAS::Server.new(url:, variables:) }
 spec = OAS::Spec.new(openapi: '3.0.3', info:, servers:)
 
-File.write 'oas.demo.json', JSON.pretty_generate(spec.serialize)
+spec.write 'oas.demo.json'
